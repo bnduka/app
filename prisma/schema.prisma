@@ -1,0 +1,1438 @@
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/bguard-tmaas-yarn-workspace/app/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  firstName     String?
+  lastName      String?
+  email         String?   @unique
+  emailVerified DateTime?
+  emailVerificationToken String? @unique
+  emailVerificationExpires DateTime?
+  image         String?
+  password      String?
+  role          UserRole  @default(BUSINESS_USER)
+  roleExpiresAt DateTime?
+  billingStatus BillingStatus @default(ACTIVE)
+  lastLoginAt   DateTime?
+  lastActiveAt  DateTime?
+  organizationId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Enhanced user management fields
+  createdBy     String?
+  invitationToken String? @unique
+  invitationExpires DateTime?
+  
+  // Security fields
+  failedLoginAttempts Int @default(0)
+  lockedUntil    DateTime?
+  twoFactorEnabled Boolean @default(false)
+  passwordResetToken String? @unique
+  passwordResetExpires DateTime?
+  lastPasswordChange DateTime?
+  isOnline       Boolean @default(false)
+  
+  accounts      Account[]
+  sessions      Session[]
+  threatModels  ThreatModel[]
+  findings      Finding[]
+  reports       Report[]
+  activityLogs  ActivityLog[]
+  slaSettings   SlaSettings?
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  
+  // Enhanced threat modeling relationships
+  findingTags   FindingTag[]  // Track which user applied tags to findings
+  
+  // BGuard Suite module relationships
+  applicationAssets   ApplicationAsset[]
+  designReviews       DesignReview[]
+  thirdPartyReviews   ThirdPartyReview[]
+  
+  // Security relationships
+  twoFactorTokens TwoFactorToken[]
+  loginActivities LoginActivity[]
+  userDevices    UserDevice[]
+  userSessions   UserSession[]
+  apiKeys        ApiKey[]
+  securityEvents SecurityEvent[]
+  endpointDiscoverySessions EndpointDiscoverySession[]
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Security settings
+  sessionTimeoutMinutes Int @default(5)
+  maxFailedLogins      Int @default(5)
+  lockoutDurationMinutes Int @default(10)
+  requireTwoFactor     Boolean @default(false)
+  allowSso             Boolean @default(false)
+  ssoProvider          String?
+  ssoConfig            String? @db.Text // JSON config for SSO
+  
+  users       User[]
+  tags        Tag[]     // Organization-specific custom tags
+  securitySettings OrganizationSecuritySettings?
+  
+  // BGuard Suite module relationships
+  applicationAssets   ApplicationAsset[]
+  designReviews       DesignReview[]
+  thirdPartyReviews   ThirdPartyReview[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model ThreatModel {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  prompt      String   @db.Text
+  status      ThreatModelStatus @default(DRAFT)
+  progress    Int      @default(0) // 0-100 for progress tracking
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      String
+  
+  // Enhanced threat modeling fields
+  generationCount Int @default(0) // Track number of "Generate More" sessions
+  lastGenerationAt DateTime? // Track when last generation occurred
+  
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  findings    Finding[]
+  reports     Report[]
+  fileUploads FileUpload[]
+  assets      Asset[]   // One-to-many with assets
+  
+  // BGuard Suite relationships
+  linkedAssets ThreatModelAssetLink[] // Link to ApplicationAssets
+}
+
+model Finding {
+  id            String      @id @default(cuid())
+  threatScenario String      // Renamed from 'title' to 'threatScenario'
+  description   String      @db.Text
+  severity      Severity
+  strideCategory StrideCategory
+  recommendation String?    @db.Text
+  status        FindingStatus @default(OPEN)
+  comments      String?     @db.Text
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  userId        String
+  threatModelId String
+  
+  // Enhanced security framework fields
+  nistControls  String[]    @default([])
+  owaspCategory String?
+  cvssScore     Float?
+  asvsLevel     Int?
+  mitigationStrategies String[] @default([])
+  references    String[]    @default([])
+  
+  // Enhanced tagging and feedback system
+  isNewGeneration Boolean    @default(false) // Track if finding was generated by "Generate More" feature
+  generationSessionId String? // Track which generation session this finding belongs to
+  
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threatModel   ThreatModel  @relation(fields: [threatModelId], references: [id], onDelete: Cascade)
+  
+  // New relationships for enhanced features
+  findingAssets FindingAsset[] // Many-to-many with assets
+  findingTags   FindingTag[]   // Many-to-many with tags
+}
+
+// Asset model for storing extracted assets from technical specifications
+model Asset {
+  id            String      @id @default(cuid())
+  name          String
+  type          AssetType
+  description   String?     @db.Text
+  properties    String?     @db.Text // JSON string for additional properties
+  threatModelId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  threatModel   ThreatModel  @relation(fields: [threatModelId], references: [id], onDelete: Cascade)
+  findingAssets FindingAsset[] // Many-to-many with findings
+  
+  @@index([threatModelId])
+  @@index([type])
+}
+
+// Tag model for organizing and categorizing findings
+model Tag {
+  id              String      @id @default(cuid())
+  name            String
+  color           String?     // Hex color for visual identification
+  description     String?
+  isSystemTag     Boolean     @default(false) // System tags vs custom org tags
+  organizationId  String?     // Null for system tags, populated for org-specific tags
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  findingTags     FindingTag[]
+  
+  @@unique([name, organizationId]) // Unique tag names per organization
+  @@index([organizationId])
+  @@index([isSystemTag])
+}
+
+// Junction table for Finding-Asset many-to-many relationship
+model FindingAsset {
+  id        String   @id @default(cuid())
+  findingId String
+  assetId   String
+  impact    AssetImpact? // How this finding affects the asset
+  createdAt DateTime @default(now())
+  
+  finding   Finding  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  
+  @@unique([findingId, assetId])
+  @@index([findingId])
+  @@index([assetId])
+}
+
+// Junction table for Finding-Tag many-to-many relationship with justification support
+model FindingTag {
+  id            String   @id @default(cuid())
+  findingId     String
+  tagId         String
+  justification String?  @db.Text // Required for False Positive and Not Applicable tags
+  createdAt     DateTime @default(now())
+  createdBy     String   // User who applied the tag
+  
+  finding       Finding  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  tag           Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  
+  @@unique([findingId, tagId])
+  @@index([findingId])
+  @@index([tagId])
+  @@index([createdBy])
+}
+
+model Report {
+  id            String      @id @default(cuid())
+  name          String
+  format        ReportFormat
+  content       String      @db.Text
+  filePath      String?
+  fileSize      Int?
+  createdAt     DateTime    @default(now())
+  userId        String
+  threatModelId String
+  
+  // Enhanced tracking fields
+  deletedBy     String?
+  deletedAt     DateTime?
+  downloadCount Int         @default(0)
+  lastDownloaded DateTime?
+  
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threatModel   ThreatModel  @relation(fields: [threatModelId], references: [id], onDelete: Cascade)
+}
+
+model FileUpload {
+  id            String      @id @default(cuid())
+  filename      String
+  originalName  String
+  filePath      String
+  fileSize      Int
+  mimeType      String
+  extractedText String?     @db.Text
+  createdAt     DateTime    @default(now())
+  threatModelId String
+  
+  threatModel   ThreatModel  @relation(fields: [threatModelId], references: [id], onDelete: Cascade)
+}
+
+model AdminStats {
+  id              String   @id @default(cuid())
+  date            DateTime @unique @default(now())
+  totalUsers      Int      @default(0)
+  totalThreatModels Int    @default(0)
+  totalFindings   Int      @default(0)
+  totalReports    Int      @default(0)
+  apiCalls        Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ActivityLog {
+  id          String      @id @default(cuid())
+  action      ActivityAction
+  status      ActivityStatus
+  description String
+  details     String?     @db.Text
+  ipAddress   String?
+  userAgent   String?
+  entityType  String?     // e.g., 'threat_model', 'file_upload', 'finding'
+  entityId    String?     // ID of the related entity
+  errorMessage String?    @db.Text
+  createdAt   DateTime    @default(now())
+  userId      String?
+  
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model SlaSettings {
+  id                String   @id @default(cuid())
+  criticalDays      Int      @default(20)
+  highDays          Int      @default(60)
+  mediumDays        Int      @default(180)
+  lowDays           Int      @default(240)
+  userId            String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Security Models
+model TwoFactorToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  type      TwoFactorType @default(EMAIL)
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LoginActivity {
+  id          String   @id @default(cuid())
+  userId      String
+  ipAddress   String
+  userAgent   String?
+  location    String?  // Geolocation
+  deviceType  String?  // mobile, desktop, tablet
+  browser     String?
+  os          String?
+  loginTime   DateTime @default(now())
+  logoutTime  DateTime?
+  isSuccessful Boolean @default(true)
+  failureReason String?
+  isSuspicious Boolean @default(false)
+  deviceFingerprint String?
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, loginTime])
+  @@index([ipAddress])
+}
+
+model UserDevice {
+  id              String   @id @default(cuid())
+  userId          String
+  deviceName      String
+  deviceType      DeviceType
+  deviceId        String   @unique // Device fingerprint/identifier
+  ipAddress       String
+  userAgent       String
+  browser         String?
+  os              String?
+  location        String?
+  isActive        Boolean  @default(true)
+  isTrusted       Boolean  @default(false)
+  lastActiveAt    DateTime @default(now())
+  createdAt       DateTime @default(now())
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([deviceId])
+}
+
+model UserSession {
+  id              String   @id @default(cuid())
+  userId          String
+  sessionToken    String   @unique
+  deviceId        String?
+  ipAddress       String
+  userAgent       String?
+  expiresAt       DateTime
+  lastActiveAt    DateTime @default(now())
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  terminatedAt    DateTime?
+  terminationReason String?
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([sessionToken])
+  @@index([expiresAt])
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  name        String
+  key         String   @unique
+  keyHash     String   @unique // Hashed version for security
+  userId      String
+  scopes      String[] // Array of permissions/scopes
+  isActive    Boolean  @default(true)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([key])
+}
+
+model SecurityEvent {
+  id          String   @id @default(cuid())
+  userId      String?
+  eventType   SecurityEventType
+  severity    SecuritySeverity @default(LOW)
+  description String
+  details     String?  @db.Text
+  ipAddress   String?
+  userAgent   String?
+  metadata    String?  @db.Text // JSON metadata
+  isResolved  Boolean  @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  createdAt   DateTime @default(now())
+  
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([eventType])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+model OrganizationSecuritySettings {
+  id                    String   @id @default(cuid())
+  organizationId        String   @unique
+  passwordMinLength     Int      @default(8)
+  passwordRequireUpper  Boolean  @default(true)
+  passwordRequireLower  Boolean  @default(true)
+  passwordRequireNumber Boolean  @default(true)
+  passwordRequireSymbol Boolean  @default(true)
+  sessionTimeoutMinutes Int      @default(5)
+  maxConcurrentSessions Int      @default(5)
+  enableIpWhitelist     Boolean  @default(false)
+  allowedIpRanges       String[] // CIDR notation
+  enableDeviceTracking  Boolean  @default(true)
+  alertOnSuspiciousLogin Boolean @default(true)
+  enableAuditLogs       Boolean  @default(true)
+  dataRetentionDays     Int      @default(90)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  BUSINESS_ADMIN
+  BUSINESS_USER
+}
+
+enum BillingStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+  EXPIRED
+}
+
+enum ThreatModelStatus {
+  DRAFT
+  ANALYZING
+  COMPLETED
+  ARCHIVED
+}
+
+enum FindingStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum StrideCategory {
+  SPOOFING
+  TAMPERING
+  REPUDIATION
+  INFORMATION_DISCLOSURE
+  DENIAL_OF_SERVICE
+  ELEVATION_OF_PRIVILEGE
+}
+
+enum ReportFormat {
+  PDF
+  HTML
+  EXCEL
+}
+
+enum ActivityAction {
+  LOGIN
+  LOGOUT
+  CREATE_THREAT_MODEL
+  UPDATE_THREAT_MODEL
+  DELETE_THREAT_MODEL
+  UPLOAD_FILE
+  DELETE_FILE
+  CREATE_FINDING
+  UPDATE_FINDING
+  DELETE_FINDING
+  GENERATE_REPORT
+  DELETE_REPORT
+  EXPORT_EXCEL
+  EXPORT_PDF
+  VIEW_DASHBOARD
+  VIEW_THREAT_MODELS
+  VIEW_SETTINGS
+  UPDATE_SLA_SETTINGS
+  SIGN_UP
+  PASSWORD_CHANGE
+  ADMIN_VIEW_USERS
+  ADMIN_UPDATE_USER
+  ADMIN_CREATE_ORGANIZATION
+  ADMIN_UPDATE_ORGANIZATION
+  ADMIN_DELETE_ORGANIZATION
+  ADMIN_ASSIGN_USER_TO_ORG
+  ADMIN_CHANGE_USER_ROLE
+  BUSINESS_ADMIN_VIEW_ORG_USERS
+  BUSINESS_ADMIN_UPDATE_USER
+  BUSINESS_ADMIN_PROMOTE_USER
+  BUSINESS_ADMIN_DEMOTE_USER
+  BUSINESS_ADMIN_CREATE_USER
+  BUSINESS_ADMIN_DELETE_USER
+  ADMIN_CREATE_USER
+  ADMIN_DELETE_USER
+  ADMIN_BULK_USER_OPERATION
+  
+  // Asset Management Actions
+  CREATE_APPLICATION_ASSET
+  UPDATE_APPLICATION_ASSET
+  DELETE_APPLICATION_ASSET
+  VIEW_APPLICATION_ASSETS
+  LINK_ASSET_TO_THREAT_MODEL
+  UNLINK_ASSET_FROM_THREAT_MODEL
+  BULK_ASSET_OPERATION
+  EXPORT_ASSETS
+  IMPORT_ASSETS
+  
+  // Design Review Actions
+  CREATE_DESIGN_REVIEW
+  UPDATE_DESIGN_REVIEW
+  DELETE_DESIGN_REVIEW
+  VIEW_DESIGN_REVIEWS
+  START_DESIGN_ANALYSIS
+  COMPLETE_DESIGN_ANALYSIS
+  LINK_ASSET_TO_DESIGN_REVIEW
+  UNLINK_ASSET_FROM_DESIGN_REVIEW
+  UPLOAD_DESIGN_DOCUMENT
+  DELETE_DESIGN_DOCUMENT
+  EXPORT_DESIGN_REVIEW_REPORT
+  BULK_DESIGN_REVIEW_OPERATION
+  
+  // Third-Party Review Actions
+  CREATE_THIRD_PARTY_REVIEW
+  UPDATE_THIRD_PARTY_REVIEW
+  DELETE_THIRD_PARTY_REVIEW
+  VIEW_THIRD_PARTY_REVIEWS
+  START_THIRD_PARTY_SCAN
+  COMPLETE_THIRD_PARTY_SCAN
+  SCHEDULE_THIRD_PARTY_SCAN
+  EXPORT_THIRD_PARTY_REPORT
+  BULK_THIRD_PARTY_REVIEW_OPERATION
+  
+  // Security Actions
+  FAILED_LOGIN
+  ACCOUNT_LOCKED
+  ACCOUNT_UNLOCKED
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  TWO_FACTOR_VERIFIED
+  TWO_FACTOR_FAILED
+  EMAIL_VERIFIED
+  EMAIL_VERIFICATION_SENT
+  PASSWORD_RESET_REQUEST
+  PASSWORD_RESET_COMPLETE
+  SESSION_TIMEOUT
+  SESSION_TERMINATED
+  DEVICE_REGISTERED
+  DEVICE_REMOVED
+  SUSPICIOUS_LOGIN_DETECTED
+  API_KEY_CREATED
+  API_KEY_DELETED
+  API_KEY_USED
+  SECURITY_SETTINGS_UPDATED
+  SSO_LOGIN
+  SSO_FAILED
+}
+
+enum ActivityStatus {
+  SUCCESS
+  FAILED
+  IN_PROGRESS
+}
+
+// Security Enums
+enum TwoFactorType {
+  EMAIL
+  SMS
+  AUTHENTICATOR
+}
+
+enum DeviceType {
+  DESKTOP
+  MOBILE
+  TABLET
+  UNKNOWN
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  ACCOUNT_LOCKED
+  ACCOUNT_UNLOCKED
+  PASSWORD_CHANGED
+  PASSWORD_RESET
+  PASSWORD_RESET_REQUEST
+  PASSWORD_RESET_COMPLETE
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  TWO_FACTOR_FAILED
+  TWO_FACTOR_VERIFIED
+  SUSPICIOUS_LOGIN
+  MULTIPLE_FAILED_LOGINS
+  SESSION_TIMEOUT
+  SESSION_HIJACK_ATTEMPT
+  DEVICE_REGISTERED
+  DEVICE_REMOVED
+  API_KEY_CREATED
+  API_KEY_DELETED
+  API_KEY_USED
+  API_KEY_COMPROMISED
+  EMAIL_VERIFICATION_SENT
+  EMAIL_VERIFICATION_FAILED
+  EMAIL_VERIFIED
+  SIGNUP_ATTEMPT_EXISTING_USER
+  UNAUTHORIZED_ACCESS_ATTEMPT
+  DATA_EXPORT
+  SETTINGS_CHANGED
+  ROLE_CHANGED
+  SSO_LOGIN
+  SSO_FAILED
+}
+
+enum SecuritySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Enhanced Threat Modeling Enums
+enum AssetType {
+  API
+  DATABASE
+  SERVICE
+  COMPONENT
+  DATA_FLOW
+  EXTERNAL_DEPENDENCY
+  USER_INTERFACE
+  AUTHENTICATION_SYSTEM
+  FILE_SYSTEM
+  NETWORK_COMPONENT
+  THIRD_PARTY_INTEGRATION
+  MICROSERVICE
+  MESSAGE_QUEUE
+  CACHE
+  LOAD_BALANCER
+  OTHER
+}
+
+enum AssetImpact {
+  DIRECT // Finding directly affects this asset
+  INDIRECT // Finding indirectly affects this asset
+  CASCADING // Finding can cascade to affect this asset
+}
+
+enum DemoRequestStatus {
+  PENDING
+  CONTACTED
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================================================
+// BGUARD SUITE ENUMS - All module-related enumerations
+// ============================================================================
+
+// Asset Management Enums
+enum ApplicationAssetType {
+  WEB_APPLICATION
+  MOBILE_APP_IOS
+  MOBILE_APP_ANDROID
+  API_SERVICE
+  MICROSERVICE
+  DATABASE
+  WEBHOOK
+  INTEGRATION
+  THIRD_PARTY_SERVICE
+  INFRASTRUCTURE
+  OTHER
+}
+
+enum ApplicationAssetStatus {
+  ACTIVE
+  INACTIVE
+  DEPRECATED
+  DECOMMISSIONED
+  PLANNED
+  DEVELOPMENT
+  TESTING
+  MAINTENANCE
+}
+
+enum BusinessCriticality {
+  VERY_HIGH
+  HIGH
+  MEDIUM
+  LOW
+  VERY_LOW
+}
+
+enum DataClassification {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  RESTRICTED
+  SECRET
+}
+
+enum HostingType {
+  CLOUD
+  ON_PREMISE
+  HYBRID
+  SAAS
+  PAAS
+  IAAS
+}
+
+enum Environment {
+  PRODUCTION
+  STAGING
+  DEVELOPMENT
+  TESTING
+  QA
+  UAT
+  SANDBOX
+}
+
+enum ThreatModelLinkStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  NOT_APPLICABLE
+}
+
+enum DesignReviewLinkStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  NOT_APPLICABLE
+}
+
+// Design Review Enums
+enum DesignReviewStatus {
+  DRAFT
+  IN_PROGRESS
+  UNDER_REVIEW
+  COMPLETED
+  CANCELLED
+  ARCHIVED
+}
+
+enum DesignReviewType {
+  ARCHITECTURE
+  SECURITY
+  COMPLIANCE
+  PRIVACY
+  FULL_ASSESSMENT
+}
+
+enum SystemType {
+  WEB_APPLICATION
+  MOBILE_APPLICATION
+  API_SERVICE
+  MICROSERVICES
+  DISTRIBUTED_SYSTEM
+  CLOUD_NATIVE
+  LEGACY_SYSTEM
+  IOT_SYSTEM
+  AI_ML_SYSTEM
+  BLOCKCHAIN
+  OTHER
+}
+
+enum SecurityGrade {
+  A
+  B
+  C
+  D
+  F
+}
+
+enum RiskLevel {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGH
+  VERY_HIGH
+  CRITICAL
+}
+
+// Third-Party Review Enums
+enum ThirdPartyReviewStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+  SCHEDULED
+}
+
+enum ScanFrequency {
+  MANUAL
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum PrivacyPolicyStatus {
+  NOT_FOUND
+  FOUND
+  REVIEWED
+  COMPLIANT
+  NON_COMPLIANT
+  OUTDATED
+}
+
+enum TermsOfServiceStatus {
+  NOT_FOUND
+  FOUND
+  REVIEWED
+  ACCEPTABLE
+  CONCERNING
+  UNACCEPTABLE
+}
+
+enum ContractStatus {
+  ACTIVE
+  EXPIRED
+  PENDING_RENEWAL
+  CANCELLED
+  SUSPENDED
+  NEGOTIATING
+}
+
+// Shared Enums
+enum LinkStatus {
+  LINKED
+  UNLINKED
+  PENDING
+  FAILED
+}
+
+model DemoRequest {
+  id          String            @id @default(cuid())
+  firstName   String
+  lastName    String
+  email       String
+  company     String
+  phone       String
+  country     String
+  hearAboutUs String?
+  status      DemoRequestStatus @default(PENDING)
+  ipAddress   String?
+  userAgent   String?
+  notes       String?           @db.Text
+  contactedAt DateTime?
+  scheduledAt DateTime?
+  completedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ContactSubmission {
+  id          String   @id @default(cuid())
+  name        String
+  email       String
+  company     String?
+  subject     String
+  message     String
+  inquiryType String   @default("general")
+  status      String   @default("NEW")
+  submittedAt DateTime @default(now())
+  respondedAt DateTime?
+  
+  @@index([email])
+  @@index([status])
+  @@index([submittedAt])
+}
+
+// ============================================================================
+// BGUARD SUITE MODULES - Asset Management, Design Review, Third-Party Review
+// ============================================================================
+
+// Asset Management Module - Comprehensive application asset catalog
+model ApplicationAsset {
+  id                String               @id @default(cuid())
+  name              String
+  description       String?              @db.Text
+  assetType         ApplicationAssetType
+  status            ApplicationAssetStatus @default(ACTIVE)
+  businessCriticality BusinessCriticality @default(MEDIUM)
+  dataClassification DataClassification  @default(INTERNAL)
+  
+  // Ownership and team information
+  owner             String?              // Owner name/email
+  team              String?              // Team responsible
+  businessUnit      String?              // Business unit
+  
+  // Technical metadata
+  techStack         String[]             @default([]) // Technologies used
+  hostingType       HostingType?         // Cloud, on-premise, hybrid
+  hostingProvider   String?              // AWS, Azure, GCP, etc.
+  environment       Environment          @default(PRODUCTION)
+  
+  // Security and compliance
+  hasAuthentication Boolean              @default(false)
+  authenticationMethods String[]         @default([])
+  hasAuthorization  Boolean              @default(false)
+  encryptionInTransit Boolean            @default(false)
+  encryptionAtRest  Boolean              @default(false)
+  complianceRequirements String[]        @default([])
+  
+  // Asset lifecycle
+  deploymentDate    DateTime?
+  lastSecurityReview DateTime?
+  lastPenetrationTest DateTime?
+  decommissionDate  DateTime?
+  
+  // Interconnections
+  upstreamAssets    String[]             @default([]) // Assets this depends on
+  downstreamAssets  String[]             @default([]) // Assets that depend on this
+  integrations      String[]             @default([]) // Third-party integrations
+  
+  // Risk assessment
+  threatModelStatus ThreatModelLinkStatus @default(NOT_STARTED)
+  designReviewStatus DesignReviewLinkStatus @default(NOT_STARTED)
+  riskScore         Float?               // Calculated risk score
+  
+  // URLs and documentation
+  applicationUrl    String?
+  documentationUrl  String?
+  repositoryUrl     String?
+  
+  // Tagging and metadata
+  tags              String[]             @default([])
+  metadata          String?              @db.Text // JSON for custom fields
+  
+  // Audit fields
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  createdBy         String
+  lastModifiedBy    String
+  
+  // Relationships
+  userId            String
+  organizationId    String?
+  
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?        @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  
+  // Linked assessments
+  linkedThreatModels ThreatModelAssetLink[]
+  linkedDesignReviews DesignReviewAssetLink[]
+  endpointDiscoverySessions EndpointDiscoverySession[]
+  
+  @@index([userId])
+  @@index([organizationId])
+  @@index([assetType])
+  @@index([status])
+  @@index([businessCriticality])
+  @@index([environment])
+  @@index([threatModelStatus])
+  @@index([designReviewStatus])
+  @@index([createdAt])
+}
+
+// Design Review Module - Secure design assessments and analysis
+model DesignReview {
+  id                String               @id @default(cuid())
+  name              String
+  description       String?              @db.Text
+  status            DesignReviewStatus   @default(DRAFT)
+  progress          Int                  @default(0) // 0-100
+  
+  // Review scope and context
+  reviewType        DesignReviewType     @default(ARCHITECTURE)
+  systemType        SystemType           @default(WEB_APPLICATION)
+  scope             String?              @db.Text
+  businessContext   String?              @db.Text
+  
+  // Technical stack information
+  techStack         String?              @db.Text // JSON object
+  cloudProviders    String[]             @default([])
+  frameworks        String[]             @default([])
+  databases         String[]             @default([])
+  
+  // Architecture and design
+  architectureDiagram String?            // File path or URL
+  dataFlowDiagram   String?              // File path or URL
+  systemDiagram     String?              // File path or URL
+  architectureDescription String?        @db.Text
+  
+  // Security analysis results
+  analysisResults   String?              @db.Text // JSON analysis results
+  securityScore     Float?               // Overall security score (0-100)
+  securityGrade     SecurityGrade?       // A, B, C, D, F
+  
+  // Security domains assessment
+  authenticationScore    Int?             @default(0) // 0-100
+  authorizationScore     Int?             @default(0)
+  dataProtectionScore    Int?             @default(0)
+  inputValidationScore   Int?             @default(0)
+  loggingMonitoringScore Int?             @default(0)
+  secureDesignScore      Int?             @default(0)
+  
+  // Findings and recommendations
+  securityFindings  String?              @db.Text // JSON array of findings
+  recommendations   String?              @db.Text // JSON array of recommendations
+  prioritizedActions String?             @db.Text // JSON array of priority actions
+  
+  // Compliance and standards
+  complianceFrameworks String[]          @default([])
+  complianceScore   Float?               // Compliance score
+  gaps              String?              @db.Text // JSON array of compliance gaps
+  
+  // Review lifecycle
+  reviewStartDate   DateTime?
+  reviewCompletedDate DateTime?
+  reviewDueDate     DateTime?
+  lastAnalysisDate  DateTime?
+  
+  // File attachments
+  uploadedFiles     String[]             @default([]) // File paths
+  
+  // Risk assessment
+  overallRisk       RiskLevel            @default(MEDIUM)
+  riskFactors       String[]             @default([])
+  mitigationPlan    String?              @db.Text
+  
+  // Audit fields
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  createdBy         String
+  lastModifiedBy    String
+  
+  // Relationships
+  userId            String
+  organizationId    String?
+  
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?        @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  
+  // Linked assets
+  linkedAssets      DesignReviewAssetLink[]
+  
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([securityGrade])
+  @@index([overallRisk])
+  @@index([createdAt])
+}
+
+// Third-Party Application Review Module - External app security assessment
+model ThirdPartyReview {
+  id                String               @id @default(cuid())
+  name              String
+  description       String?              @db.Text
+  applicationUrl    String               // Primary URL being reviewed
+  additionalUrls    String[]             @default([]) // Additional URLs/domains
+  
+  // Review metadata
+  status            ThirdPartyReviewStatus @default(PENDING)
+  lastScanDate      DateTime?
+  nextScanDate      DateTime?
+  scanFrequency     ScanFrequency        @default(MANUAL)
+  
+  // Application information
+  vendor            String?              // Vendor/provider name
+  applicationCategory String?            // SaaS, API, Tool, etc.
+  businessPurpose   String?              @db.Text
+  dataTypes         String[]             @default([]) // Types of data shared
+  
+  // Security assessment results
+  overallScore      Float?               // 0-100 security score
+  securityGrade     SecurityGrade?       // A, B, C, D, F
+  lastAssessmentDate DateTime?
+  
+  // Technical security checks
+  tlsGrade          String?              // SSL/TLS assessment grade
+  httpSecurityHeaders String?            @db.Text // JSON object with header analysis
+  cookieAnalysis    String?              @db.Text // JSON cookie security analysis
+  privacyPolicyStatus PrivacyPolicyStatus @default(NOT_FOUND)
+  termsOfServiceStatus TermsOfServiceStatus @default(NOT_FOUND)
+  
+  // Authentication and authorization
+  supportsSSO       Boolean?             
+  supportsMFA       Boolean?
+  authenticationMethods String[]         @default([])
+  
+  // Compliance and certifications
+  soc2Compliant     Boolean?
+  iso27001Compliant Boolean?
+  gdprCompliant     Boolean?
+  hipaaBaa          Boolean?
+  certifications    String[]             @default([])
+  
+  // Security features assessment
+  encryptionInTransit Boolean?
+  encryptionAtRest  Boolean?
+  dataBackups       Boolean?
+  incidentResponse  Boolean?
+  penetrationTesting Boolean?
+  vulnerabilityManagement Boolean?
+  
+  // Risk assessment
+  riskLevel         RiskLevel            @default(MEDIUM)
+  riskFactors       String[]             @default([])
+  dataClassification DataClassification @default(INTERNAL)
+  businessCriticality BusinessCriticality @default(MEDIUM)
+  
+  // Detailed assessment results
+  checklistResults  String?              @db.Text // JSON checklist results
+  securityFindings  String?              @db.Text // JSON security findings
+  recommendations   String?              @db.Text // JSON recommendations
+  
+  // Business context
+  businessOwner     String?
+  technicalContact  String?
+  contractStatus    ContractStatus       @default(ACTIVE)
+  contractExpiry    DateTime?
+  dataProcessingAgreement Boolean        @default(false)
+  
+  // Monitoring and alerts
+  monitoringEnabled Boolean              @default(false)
+  alertsEnabled     Boolean              @default(false)
+  lastAlertDate     DateTime?
+  
+  // File attachments
+  screenshots       String[]             @default([]) // Screenshot file paths
+  documents         String[]             @default([]) // Document file paths
+  
+  // Audit fields
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  createdBy         String
+  lastModifiedBy    String
+  
+  // Relationships
+  userId            String
+  organizationId    String?
+  
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?        @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([securityGrade])
+  @@index([riskLevel])
+  @@index([lastScanDate])
+  @@index([nextScanDate])
+  @@index([createdAt])
+}
+
+// Junction table for ThreatModel-ApplicationAsset linking
+model ThreatModelAssetLink {
+  id              String           @id @default(cuid())
+  threatModelId   String
+  applicationAssetId String
+  linkStatus      LinkStatus       @default(LINKED)
+  notes           String?          @db.Text
+  createdAt       DateTime         @default(now())
+  createdBy       String
+  
+  threatModel     ThreatModel      @relation(fields: [threatModelId], references: [id], onDelete: Cascade)
+  applicationAsset ApplicationAsset @relation(fields: [applicationAssetId], references: [id], onDelete: Cascade)
+  
+  @@unique([threatModelId, applicationAssetId])
+  @@index([threatModelId])
+  @@index([applicationAssetId])
+}
+
+// Junction table for DesignReview-ApplicationAsset linking
+model DesignReviewAssetLink {
+  id                 String           @id @default(cuid())
+  designReviewId     String
+  applicationAssetId String
+  linkStatus         LinkStatus       @default(LINKED)
+  notes              String?          @db.Text
+  createdAt          DateTime         @default(now())
+  createdBy          String
+  
+  designReview       DesignReview     @relation(fields: [designReviewId], references: [id], onDelete: Cascade)
+  applicationAsset   ApplicationAsset @relation(fields: [applicationAssetId], references: [id], onDelete: Cascade)
+  
+  @@unique([designReviewId, applicationAssetId])
+  @@index([designReviewId])
+  @@index([applicationAssetId])
+}
+
+// ============================================================================
+// ENDPOINT DISCOVERY MODULE - Automated endpoint discovery with AI classification
+// ============================================================================
+
+// Endpoint Discovery Session - Tracks discovery scans for assets
+model EndpointDiscoverySession {
+  id                String                      @id @default(cuid())
+  applicationAssetId String
+  domain            String                      // Domain being scanned
+  status            EndpointDiscoveryStatus     @default(PENDING)
+  
+  // Scan configuration
+  maxDepth          Int                         @default(3)
+  includeSubdomains Boolean                     @default(false)
+  followRedirects   Boolean                     @default(true)
+  customHeaders     String?                     @db.Text // JSON object
+  authConfig        String?                     @db.Text // JSON auth configuration
+  
+  // Progress tracking
+  progress          Int                         @default(0) // 0-100
+  totalEndpoints    Int                         @default(0)
+  processedEndpoints Int                        @default(0)
+  
+  // Results summary
+  endpointsFound    Int                         @default(0)
+  highRiskEndpoints Int                         @default(0)
+  mediumRiskEndpoints Int                       @default(0)
+  lowRiskEndpoints  Int                         @default(0)
+  anomaliesDetected Int                         @default(0)
+  
+  // AI Analysis summary
+  aiSummary         String?                     @db.Text // Natural language summary
+  insights          String?                     @db.Text // JSON insights from AI
+  recommendations   String?                     @db.Text // JSON recommendations
+  
+  // Scan metadata
+  scanStartedAt     DateTime?
+  scanCompletedAt   DateTime?
+  scanDuration      Int?                        // Duration in seconds
+  zapSessionId      String?                     // OWASP ZAP session ID
+  
+  // Error handling
+  errorMessage      String?                     @db.Text
+  retryCount        Int                         @default(0)
+  
+  // Audit fields
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+  createdBy         String
+  
+  // Relationships
+  applicationAsset  ApplicationAsset            @relation(fields: [applicationAssetId], references: [id], onDelete: Cascade)
+  user              User                        @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  discoveredEndpoints DiscoveredEndpoint[]
+  
+  @@index([applicationAssetId])
+  @@index([status])
+  @@index([domain])
+  @@index([createdAt])
+}
+
+// Discovered Endpoint - Individual endpoints found during discovery
+model DiscoveredEndpoint {
+  id                String                      @id @default(cuid())
+  sessionId         String
+  
+  // Endpoint details
+  url               String                      @db.Text
+  method            String                      @default("GET") // HTTP method
+  path              String                      @db.Text
+  queryParams       String[]                    @default([])
+  
+  // Response metadata
+  statusCode        Int?
+  responseSize      Int?                        // Response size in bytes
+  responseTime      Int?                        // Response time in milliseconds
+  contentType       String?
+  serverHeader      String?
+  
+  // Security headers analysis
+  securityHeaders   String?                     @db.Text // JSON security headers analysis
+  cookieAnalysis    String?                     @db.Text // JSON cookie analysis
+  
+  // AI Classification results
+  endpointType      EndpointType?               // AI-classified type
+  sensitivity       EndpointSensitivity?        // AI-classified sensitivity
+  riskScore         Float?                      // 0-10 risk score
+  riskLevel         EndpointRiskLevel?          // LOW, MEDIUM, HIGH, CRITICAL
+  
+  // AI Analysis
+  classification    String?                     @db.Text // JSON detailed classification
+  functionPurpose   String?                     @db.Text // AI-determined purpose
+  securityConcerns  String[]                    @default([]) // Security issues identified
+  dataExposure      String[]                    @default([]) // Potential data exposure
+  
+  // Anomaly detection
+  isAnomaly         Boolean                     @default(false)
+  anomalyReason     String?                     @db.Text
+  anomalyScore      Float?                      // 0-1 anomaly score
+  
+  // Discovery metadata
+  discoveredAt      DateTime                    @default(now())
+  discoveryMethod   String?                     // How endpoint was discovered (crawl, spider, etc)
+  parentUrl         String?                     @db.Text // URL that led to this endpoint
+  depth             Int                         @default(0) // Crawl depth
+  
+  // Additional metadata
+  forms             String?                     @db.Text // JSON form analysis
+  jsFiles           String[]                    @default([]) // Associated JS files
+  assets            String[]                    @default([]) // Associated assets (CSS, images, etc)
+  
+  // Relationships
+  session           EndpointDiscoverySession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@index([sessionId])
+  @@index([endpointType])
+  @@index([riskLevel])
+  @@index([isAnomaly])
+  @@index([discoveredAt])
+}
+
+// Enums for Endpoint Discovery
+enum EndpointDiscoveryStatus {
+  PENDING
+  INITIALIZING
+  SCANNING
+  ANALYZING
+  CLASSIFYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum EndpointType {
+  LOGIN_PAGE
+  AUTHENTICATION
+  ADMIN_PANEL
+  API_ENDPOINT
+  FORM_SUBMISSION
+  FILE_UPLOAD
+  DOWNLOAD
+  SEARCH
+  USER_PROFILE
+  STATIC_CONTENT
+  DOCUMENTATION
+  ERROR_PAGE
+  REDIRECT
+  HEALTH_CHECK
+  METRICS
+  WEBHOOK
+  CALLBACK
+  OTHER
+}
+
+enum EndpointSensitivity {
+  PUBLIC
+  INTERNAL
+  RESTRICTED
+  CONFIDENTIAL
+  HIGHLY_SENSITIVE
+}
+
+enum EndpointRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+
+
+
+
+
+
+
